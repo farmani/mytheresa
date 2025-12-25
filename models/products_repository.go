@@ -4,9 +4,17 @@ import (
 	"gorm.io/gorm"
 )
 
+// ProductsRepositoryInterface defines the contract for product data access
+type ProductsRepositoryInterface interface {
+	GetAllProducts() ([]Product, error)
+}
+
 type ProductsRepository struct {
 	db *gorm.DB
 }
+
+// Ensure ProductsRepository implements the interface
+var _ ProductsRepositoryInterface = (*ProductsRepository)(nil)
 
 func NewProductsRepository(db *gorm.DB) *ProductsRepository {
 	return &ProductsRepository{
