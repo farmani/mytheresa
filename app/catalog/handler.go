@@ -36,6 +36,7 @@ func (h *CatalogHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	res, err := h.repo.GetAllProducts()
 	if err != nil {
 		api.ErrorResponse(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	// Map response
