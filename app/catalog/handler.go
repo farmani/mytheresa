@@ -8,12 +8,18 @@ import (
 )
 
 type Response struct {
-	Products []Product `json:"products"`
+	Products []ProductDTO `json:"products"`
 }
 
-type Product struct {
-	Code  string  `json:"code"`
-	Price float64 `json:"price"`
+type CategoryDTO struct {
+	Code string `json:"code"`
+	Name string `json:"name"`
+}
+
+type ProductDTO struct {
+	Code     string       `json:"code"`
+	Price    float64      `json:"price"`
+	Category *CategoryDTO `json:"category,omitempty"`
 }
 
 type CatalogHandler struct {
@@ -33,12 +39,20 @@ func (h *CatalogHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Map response
-	products := make([]Product, len(res))
+	products := make([]ProductDTO, len(res))
 	for i, p := range res {
-		products[i] = Product{
+		dto := ProductDTO{
 			Code:  p.Code,
 			Price: p.Price.InexactFloat64(),
 		}
+		if p.Category != nil {
+			dto.Category = &CategoryDTO{
+				Code: p.Category.Code,
+				Name: p.Category.Name,
+			}
+		}
+
+		products[i] = dto
 	}
 
 	response := Response{
