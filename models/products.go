@@ -4,6 +4,13 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+// ProductQueryParameters holds filtering parameters includes pagination options
+type ProductQueryParameters struct {
+	PaginationQueryParameters
+	Category      string
+	PriceLessThan *decimal.Decimal
+}
+
 // Product represents a product in the catalog.
 // It includes a unique code and a price.
 type Product struct {

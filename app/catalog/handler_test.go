@@ -1,7 +1,9 @@
 package catalog
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,17 +19,27 @@ import (
 // so we use this mock repository to simulate repository behavior
 type MockProductsRepository struct {
 	products []models.Product
+	total    int64
 	getErr   error
 }
 
-func (m *MockProductsRepository) GetAllProducts() ([]models.Product, error) {
+func (m *MockProductsRepository) GetAllProducts(ctx context.Context) ([]models.Product, error) {
 	return m.products, m.getErr
+}
+
+func (m *MockProductsRepository) GetProducts(ctx context.Context, opts models.ProductQueryParameters) ([]models.Product, int64, error) {
+	if m.getErr != nil {
+		return nil, 0, m.getErr
+	}
+
+	return m.products, m.total, nil
 }
 
 func TestHandleGet(t *testing.T) {
 	t.Run("get all products successfully", func(t *testing.T) {
 		mockRepo := &MockProductsRepository{
 			products: []models.Product{},
+			total:    0,
 			getErr:   nil,
 		}
 
@@ -40,10 +52,9 @@ func TestHandleGet(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 	})
 
-	t.Run("returns internal server error on repository error", func(t *testing.T) {
+	t.Run("returns error when repository fails", func(t *testing.T) {
 		mockRepo := &MockProductsRepository{
-			products: nil,
-			getErr:   assert.AnError,
+			getErr: errors.New("database error"),
 		}
 
 		handler := NewCatalogHandler(mockRepo)
@@ -53,6 +64,7 @@ func TestHandleGet(t *testing.T) {
 		handler.HandleGet(rec, req)
 
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Contains(t, rec.Body.String(), "database error")
 	})
 
 	t.Run("includes category in response when product has category", func(t *testing.T) {
@@ -67,6 +79,7 @@ func TestHandleGet(t *testing.T) {
 					},
 				},
 			},
+			total:  1,
 			getErr: nil,
 		}
 
@@ -79,6 +92,9 @@ func TestHandleGet(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 
 		var body struct {
+			Total    int64 `json:"total"`
+			Offset   int   `json:"offset"`
+			Limit    int   `json:"limit"`
 			Products []struct {
 				Category *struct {
 					Code string `json:"code"`
@@ -95,15 +111,15 @@ func TestHandleGet(t *testing.T) {
 		assert.Equal(t, "Clothing", body.Products[0].Category.Name)
 	})
 
-	t.Run("product without category returns nil category in response", func(t *testing.T) {
+	t.Run("return product without category", func(t *testing.T) {
 		mockRepo := &MockProductsRepository{
 			products: []models.Product{
 				{
-					Code:     "PROD009",
-					Price:    decimal.NewFromFloat(49.99),
-					Category: nil,
+					Code:  "PROD009",
+					Price: decimal.NewFromFloat(49.99),
 				},
 			},
+			total:  1,
 			getErr: nil,
 		}
 
@@ -116,6 +132,9 @@ func TestHandleGet(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 
 		var body struct {
+			Total    int64 `json:"total"`
+			Offset   int   `json:"offset"`
+			Limit    int   `json:"limit"`
 			Products []struct {
 				Category *struct {
 					Code string `json:"code"`
@@ -127,5 +146,126 @@ func TestHandleGet(t *testing.T) {
 		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 		require.Len(t, body.Products, 1)
 		assert.Nil(t, body.Products[0].Category)
+	})
+
+	t.Run("uses default pagination values", func(t *testing.T) {
+		mockRepo := &MockProductsRepository{
+			products: []models.Product{},
+			total:    0,
+		}
+
+		handler := NewCatalogHandler(mockRepo)
+		req := httptest.NewRequest("GET", "/catalog", nil)
+		rec := httptest.NewRecorder()
+
+		handler.HandleGet(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), `"offset":0`)
+		assert.Contains(t, rec.Body.String(), `"limit":10`)
+	})
+
+	t.Run("returns paginated products with category", func(t *testing.T) {
+		mockRepo := &MockProductsRepository{
+			products: []models.Product{
+				{
+					Code:  "PROD001",
+					Price: decimal.NewFromFloat(10.99),
+					Category: &models.Category{
+						Code: "CLOTHING",
+						Name: "Clothing",
+					},
+				},
+			},
+			total: 1,
+		}
+
+		handler := NewCatalogHandler(mockRepo)
+		req := httptest.NewRequest("GET", "/catalog?limit=5&offset=0", nil)
+		rec := httptest.NewRecorder()
+
+		handler.HandleGet(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+
+		var body struct {
+			Total    int64 `json:"total"`
+			Offset   int   `json:"offset"`
+			Limit    int   `json:"limit"`
+			Products []struct {
+				Category *struct {
+					Code string `json:"code"`
+					Name string `json:"name"`
+				} `json:"category"`
+			} `json:"products"`
+		}
+
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		require.Len(t, body.Products, 1)
+		assert.Equal(t, "CLOTHING", body.Products[0].Category.Code)
+		assert.Equal(t, "Clothing", body.Products[0].Category.Name)
+		assert.Equal(t, int64(1), body.Total)
+		assert.Equal(t, 0, body.Offset)
+		assert.Equal(t, 5, body.Limit)
+	})
+
+	t.Run("validates limit must be between 1 and 100", func(t *testing.T) {
+		mockRepo := &MockProductsRepository{}
+		handler := NewCatalogHandler(mockRepo)
+
+		// Test limit > 100
+		req := httptest.NewRequest("GET", "/catalog?limit=101", nil)
+		rec := httptest.NewRecorder()
+		handler.HandleGet(rec, req)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "limit must be between 1 and 100")
+
+		// Test limit < 1
+		req = httptest.NewRequest("GET", "/catalog?limit=0", nil)
+		rec = httptest.NewRecorder()
+		handler.HandleGet(rec, req)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "limit must be between 1 and 100")
+	})
+
+	t.Run("validates offset must be non-negative", func(t *testing.T) {
+		mockRepo := &MockProductsRepository{}
+		handler := NewCatalogHandler(mockRepo)
+
+		req := httptest.NewRequest("GET", "/catalog?offset=-1", nil)
+		rec := httptest.NewRecorder()
+		handler.HandleGet(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "invalid offset parameter")
+	})
+
+	t.Run("validates category parameter", func(t *testing.T) {
+		mockRepo := &MockProductsRepository{}
+		handler := NewCatalogHandler(mockRepo)
+
+		req := httptest.NewRequest("GET", "/catalog?category=Hats", nil)
+		rec := httptest.NewRecorder()
+		handler.HandleGet(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		var body struct {
+			Error string `json:"error"`
+		}
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+		require.Equal(t, `invalid category "Hats"`, body.Error)
+	})
+
+	t.Run("validates price_less_than parameter", func(t *testing.T) {
+		mockRepo := &MockProductsRepository{}
+		handler := NewCatalogHandler(mockRepo)
+
+		req := httptest.NewRequest("GET", "/catalog?price_less_than=invalid", nil)
+		rec := httptest.NewRecorder()
+		handler.HandleGet(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "invalid price_less_than parameter")
 	})
 }
