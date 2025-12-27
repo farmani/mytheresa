@@ -163,10 +163,11 @@ func parseQueryOptions(r *http.Request) (models.ProductQueryParameters, error) {
 	}
 
 	if category := r.URL.Query().Get("category"); category != "" {
+		category = strings.TrimSpace(strings.ToUpper(category))
 		if !validCategory(category) {
 			return opts, fmt.Errorf("invalid category %q", category)
 		}
-		opts.Category = strings.ToUpper(category)
+		opts.Category = category
 	}
 
 	if priceStr := r.URL.Query().Get("price_less_than"); priceStr != "" {
@@ -186,6 +187,6 @@ func validCategory(category string) bool {
 		"SHOES":       {},
 		"ACCESSORIES": {},
 	}
-	_, ok := allowed[strings.ToUpper(category)]
+	_, ok := allowed[category]
 	return ok
 }
