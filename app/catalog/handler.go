@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/mytheresa/go-hiring-challenge/app/api"
 	"github.com/mytheresa/go-hiring-challenge/models"
@@ -104,7 +105,7 @@ func parseQueryOptions(r *http.Request) (models.ProductQueryParameters, error) {
 		if !validCategory(category) {
 			return opts, fmt.Errorf("invalid category %q", category)
 		}
-		opts.Category = category
+		opts.Category = strings.ToUpper(category)
 	}
 
 	if priceStr := r.URL.Query().Get("price_less_than"); priceStr != "" {
@@ -120,10 +121,10 @@ func parseQueryOptions(r *http.Request) (models.ProductQueryParameters, error) {
 
 func validCategory(category string) bool {
 	allowed := map[string]struct{}{
-		"Clothing":    {},
-		"Shoes":       {},
-		"Accessories": {},
+		"CLOTHING":    {},
+		"SHOES":       {},
+		"ACCESSORIES": {},
 	}
-	_, ok := allowed[category]
+	_, ok := allowed[strings.ToUpper(category)]
 	return ok
 }
