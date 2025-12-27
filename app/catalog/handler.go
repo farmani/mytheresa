@@ -1,7 +1,7 @@
 package catalog
 
 import (
-	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -10,6 +10,7 @@ import (
 	"github.com/mytheresa/go-hiring-challenge/app/api"
 	"github.com/mytheresa/go-hiring-challenge/models"
 	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
 )
 
 type Response struct {
@@ -30,6 +31,19 @@ type ProductDTO struct {
 	Category *CategoryDTO `json:"category,omitempty"`
 }
 
+type ProductDetailResponse struct {
+	Code     string       `json:"code"`
+	Price    float64      `json:"price"`
+	Category *CategoryDTO `json:"category,omitempty"`
+	Variants []VariantDTO `json:"variants"`
+}
+
+type VariantDTO struct {
+	Name  string  `json:"name"`
+	SKU   string  `json:"sku"`
+	Price float64 `json:"price"`
+}
+
 type CatalogHandler struct {
 	repo models.ProductsRepositoryInterface
 }
@@ -47,7 +61,7 @@ func (h *CatalogHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, total, err := h.repo.GetProducts(context.Background(), opts)
+	res, total, err := h.repo.GetProducts(r.Context(), opts)
 	if err != nil {
 		api.ErrorResponse(w, http.StatusInternalServerError, err.Error())
 		return
@@ -75,6 +89,53 @@ func (h *CatalogHandler) HandleGet(w http.ResponseWriter, r *http.Request) {
 		Offset:   opts.Offset,
 		Limit:    opts.Limit,
 	})
+}
+
+func (h *CatalogHandler) HandleGetByCode(w http.ResponseWriter, r *http.Request) {
+	code := r.PathValue("code")
+	if code == "" {
+		api.ErrorResponse(w, http.StatusBadRequest, "product code is required")
+		return
+	}
+
+	product, err := h.repo.GetProductByCode(r.Context(), code)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			api.ErrorResponse(w, http.StatusNotFound, "product not found")
+			return
+		}
+		api.ErrorResponse(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Map variants with price inheritance
+	variants := make([]VariantDTO, len(product.Variants))
+	for i, v := range product.Variants {
+		price := v.Price
+		if price.IsZero() {
+			price = product.Price
+		}
+		variants[i] = VariantDTO{
+			Name:  v.Name,
+			SKU:   v.SKU,
+			Price: price.InexactFloat64(),
+		}
+	}
+
+	response := ProductDetailResponse{
+		Code:     product.Code,
+		Price:    product.Price.InexactFloat64(),
+		Variants: variants,
+	}
+
+	if product.Category != nil {
+		response.Category = &CategoryDTO{
+			Code: product.Category.Code,
+			Name: product.Category.Name,
+		}
+	}
+
+	api.OKResponse(w, response)
 }
 
 func parseQueryOptions(r *http.Request) (models.ProductQueryParameters, error) {

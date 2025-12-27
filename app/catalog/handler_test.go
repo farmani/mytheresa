@@ -12,15 +12,18 @@ import (
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // MockProductsRepository implements ProductsRepositoryInterface for testing,
 // unit tests should not depend on the database,
 // so we use this mock repository to simulate repository behavior
 type MockProductsRepository struct {
-	products []models.Product
-	total    int64
-	getErr   error
+	products      []models.Product
+	total         int64
+	productByCode *models.Product
+	getErr        error
+	getByCodeErr  error
 }
 
 func (m *MockProductsRepository) GetAllProducts(ctx context.Context) ([]models.Product, error) {
@@ -33,6 +36,13 @@ func (m *MockProductsRepository) GetProducts(ctx context.Context, opts models.Pr
 	}
 
 	return m.products, m.total, nil
+}
+
+func (m *MockProductsRepository) GetProductByCode(ctx context.Context, code string) (*models.Product, error) {
+	if m.getByCodeErr != nil {
+		return nil, m.getByCodeErr
+	}
+	return m.productByCode, nil
 }
 
 func TestHandleGet(t *testing.T) {
@@ -267,5 +277,117 @@ func TestHandleGet(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
 		assert.Contains(t, rec.Body.String(), "invalid price_less_than parameter")
+	})
+}
+
+func TestHandleGetByCode(t *testing.T) {
+	t.Run("returns product with variants", func(t *testing.T) {
+		mockRepo := &MockProductsRepository{
+			productByCode: &models.Product{
+				Code:  "PROD001",
+				Price: decimal.NewFromFloat(100.00),
+				Category: &models.Category{
+					Code: "CLOTHING",
+					Name: "Clothing",
+				},
+				Variants: []models.Variant{
+					{
+						Name:  "Small",
+						SKU:   "PROD001-S",
+						Price: decimal.NewFromFloat(95.00),
+					},
+					{
+						Name:  "Medium",
+						SKU:   "PROD001-M",
+						Price: decimal.NewFromFloat(100.00),
+					},
+				},
+			},
+		}
+
+		handler := NewCatalogHandler(mockRepo)
+		req := httptest.NewRequest("GET", "/catalog/PROD001", nil)
+		req.SetPathValue("code", "PROD001")
+		rec := httptest.NewRecorder()
+
+		handler.HandleGetByCode(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "PROD001")
+		assert.Contains(t, rec.Body.String(), "CLOTHING")
+		assert.Contains(t, rec.Body.String(), "PROD001-S")
+		assert.Contains(t, rec.Body.String(), "PROD001-M")
+	})
+
+	t.Run("variant inherits product price when no variant price", func(t *testing.T) {
+		mockRepo := &MockProductsRepository{
+			productByCode: &models.Product{
+				Code:  "PROD001",
+				Price: decimal.NewFromFloat(100.00),
+				Variants: []models.Variant{
+					{
+						Name:  "Default",
+						SKU:   "PROD001-DEF",
+						Price: decimal.Decimal{}, // Zero value - should inherit
+					},
+				},
+			},
+		}
+
+		handler := NewCatalogHandler(mockRepo)
+		req := httptest.NewRequest("GET", "/catalog/PROD001", nil)
+		req.SetPathValue("code", "PROD001")
+		rec := httptest.NewRecorder()
+
+		handler.HandleGetByCode(rec, req)
+
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), `"price":100`)
+	})
+
+	t.Run("returns 404 when product not found", func(t *testing.T) {
+		mockRepo := &MockProductsRepository{
+			getByCodeErr: gorm.ErrRecordNotFound,
+		}
+
+		handler := NewCatalogHandler(mockRepo)
+		req := httptest.NewRequest("GET", "/catalog/NOTFOUND", nil)
+		req.SetPathValue("code", "NOTFOUND")
+		rec := httptest.NewRecorder()
+
+		handler.HandleGetByCode(rec, req)
+
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+		assert.Contains(t, rec.Body.String(), "product not found")
+	})
+
+	t.Run("returns error when repository fails", func(t *testing.T) {
+		mockRepo := &MockProductsRepository{
+			getByCodeErr: errors.New("database error"),
+		}
+
+		handler := NewCatalogHandler(mockRepo)
+		req := httptest.NewRequest("GET", "/catalog/PROD001", nil)
+		req.SetPathValue("code", "PROD001")
+		rec := httptest.NewRecorder()
+
+		handler.HandleGetByCode(rec, req)
+
+		assert.Equal(t, http.StatusInternalServerError, rec.Code)
+		assert.Contains(t, rec.Body.String(), "database error")
+	})
+
+	t.Run("returns error when code is empty", func(t *testing.T) {
+		mockRepo := &MockProductsRepository{}
+
+		handler := NewCatalogHandler(mockRepo)
+		req := httptest.NewRequest("GET", "/catalog/", nil)
+		// Not setting path value simulates empty code
+		rec := httptest.NewRecorder()
+
+		handler.HandleGetByCode(rec, req)
+
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		assert.Contains(t, rec.Body.String(), "product code is required")
 	})
 }

@@ -10,6 +10,7 @@ import (
 type ProductsRepositoryInterface interface {
 	GetAllProducts(ctx context.Context) ([]Product, error)
 	GetProducts(ctx context.Context, opts ProductQueryParameters) ([]Product, int64, error)
+	GetProductByCode(ctx context.Context, code string) (*Product, error)
 }
 
 type ProductsRepository struct {
@@ -57,4 +58,20 @@ func (r *ProductsRepository) GetProducts(ctx context.Context, opts ProductQueryP
 	}
 
 	return products, total, nil
+}
+
+func (r *ProductsRepository) GetProductByCode(ctx context.Context, code string) (*Product, error) {
+	var product Product
+	err := r.db.WithContext(ctx).
+		Preload("Category").
+		Preload("Variants").
+		Where("code = ?", code).
+		First(&product).
+		Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &product, nil
 }
