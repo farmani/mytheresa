@@ -11,6 +11,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/mytheresa/go-hiring-challenge/app/catalog"
+	"github.com/mytheresa/go-hiring-challenge/app/category"
 	"github.com/mytheresa/go-hiring-challenge/app/database"
 	"github.com/mytheresa/go-hiring-challenge/models"
 )
@@ -26,22 +27,34 @@ func main() {
 	defer stop()
 
 	// Initialize database connection
-	db, close := database.New(
+	db, closeDB := database.New(
 		os.Getenv("POSTGRES_USER"),
 		os.Getenv("POSTGRES_PASSWORD"),
 		os.Getenv("POSTGRES_DB"),
 		os.Getenv("POSTGRES_PORT"),
 	)
-	defer close()
+
+	defer func() {
+		if err := closeDB(); err != nil {
+			log.Printf("Error closing database connection: %s", err)
+		}
+	}()
 
 	// Initialize handlers
 	prodRepo := models.NewProductsRepository(db)
+	catRepo := models.NewCategoriesRepository(db)
+
 	catalogHandler := catalog.NewCatalogHandler(prodRepo)
+	categoryHandler := categories.NewCategoriesHandler(catRepo)
 
 	// Set up routing
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /catalog", catalogHandler.HandleGet)
 	mux.HandleFunc("GET /catalog/{code}", catalogHandler.HandleGetByCode)
+
+	// Categories routes
+	mux.HandleFunc("GET /categories", categoryHandler.HandleGetAll)
+	mux.HandleFunc("POST /categories", categoryHandler.HandleCreate)
 
 	// Set up the HTTP server
 	srv := &http.Server{
