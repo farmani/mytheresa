@@ -163,11 +163,11 @@ func parseQueryOptions(r *http.Request) (models.ProductQueryParameters, error) {
 	}
 
 	if category := r.URL.Query().Get("category"); category != "" {
-		category = strings.TrimSpace(strings.ToUpper(category))
-		if !validCategory(category) {
+		categoryNormalized := strings.TrimSpace(strings.ToUpper(category))
+		if !validCategory(categoryNormalized) {
 			return opts, fmt.Errorf("invalid category %q", category)
 		}
-		opts.Category = category
+		opts.Category = categoryNormalized
 	}
 
 	if priceStr := r.URL.Query().Get("price_less_than"); priceStr != "" {
